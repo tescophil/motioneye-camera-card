@@ -1,0 +1,27 @@
+# Full example of the card with every option shown.
+# All options except `cameras` are optional; the values below are the defaults
+# unless a comment says otherwise.
+type: custom:motioneye-camera-card
+title: Cameras
+layout: grid                  # grid | single
+default_quality: auto         # auto | normal | low
+thumb_mode: snapshot          # snapshot | stream
+thumb_low_res: true
+snapshot_interval: 5          # seconds
+grid_columns: 2
+aspect_ratio: "16:9"
+motion_hold: 30               # seconds
+strip: true
+strip_content: both           # both | videos | snapshots
+strip_limit: 30
+timeline: true
+timeline_days: 7              # 0 = all available days
+timeline_limit: 500           # per day, per type
+cameras:
+  - camera.living_room
+  - entity: camera.garage
+    name: Garage
+    low_entity: camera.garage_low           # default is <entity>_low
+    motion_entity: binary_sensor.garage_motion
+  - camera.patio
+  - camera.office

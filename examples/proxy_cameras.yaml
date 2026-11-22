@@ -1,0 +1,24 @@
+# Low-resolution copies of your motionEye cameras, made with Home Assistant's
+# built-in "proxy" camera platform. Add to configuration.yaml (merge with any
+# existing `camera:` section) and restart Home Assistant.
+#
+# The card looks for camera.<original_object_id>_low automatically.
+# (The visual editor can generate this block for you from your chosen cameras.)
+camera:
+  - platform: proxy
+    entity_id: camera.living_room
+    name: "Living Room Low"      # -> camera.living_room_low
+    mode: resize
+    max_image_width: 480
+    image_quality: 50
+    max_stream_width: 480
+    stream_quality: 50
+
+  - platform: proxy
+    entity_id: camera.garage
+    name: "Garage Low"           # -> camera.garage_low
+    mode: resize
+    max_image_width: 480
+    image_quality: 50
+    max_stream_width: 480
+    stream_quality: 50
