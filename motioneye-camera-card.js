@@ -5,23 +5,30 @@
  * No build step, no dependencies.  MIT licence.
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 const CARD_TAG = "motioneye-camera-card";
 const QUALITY_KEY = "motioneye-camera-card:quality";
+const STRIP_TTL = 120000; // ms before a camera's recordings strip is refreshed in the background
+const STRIP_ERROR_TTL = 30000; // ms before a failed strip load is retried
+const PRELOAD_PER_CAMERA = 8; // thumbnails fetched ahead of time per camera
+const MAX_BLOBS = 300; // cap on preloaded thumbnails kept in memory
 
 const DEFAULT_CONFIG = {
   layout: "grid", // grid | single
   default_quality: "auto", // auto | normal | low
   thumb_mode: "snapshot", // snapshot | stream
-  thumb_low_res: true, // use the low-res proxy camera for thumbnails
+  thumb_quality: "follow", // follow | low | normal: which feed the grid tiles use (follow = same as the HD/SD button)
   snapshot_interval: 5, // seconds between thumbnail refreshes
   grid_columns: 2,
   aspect_ratio: "16:9",
   motion_hold: 30, // seconds to keep the motion indicator after an event
+  select_on_motion: false, // make a camera the main camera when it starts detecting motion
+  select_on_motion_lock: 30, // seconds to leave your own choice alone before auto-selecting again
   timeline: true,
   strip: true, // horizontal strip of recent recordings under the main image
   strip_content: "both", // both | videos | snapshots
   strip_limit: 30, // max items in the strip
+  strip_prefetch: true, // load every camera's strip (and its first thumbnails) in the background
   timeline_days: 7, // how many of the newest days to load (0 = all available days)
   timeline_limit: 500, // safety cap on items per kind (videos / images) per camera
 };
@@ -51,6 +58,12 @@ function normalizeConfig(config) {
   if (!["snapshot", "stream"].includes(cfg.thumb_mode)) {
     throw new Error("`thumb_mode` must be snapshot or stream");
   }
+  if (!["follow", "low", "normal"].includes(cfg.thumb_quality)) {
+    throw new Error("`thumb_quality` must be follow, low or normal");
+  }
+  cfg.select_on_motion = cfg.select_on_motion === true;
+  const lock = Number(cfg.select_on_motion_lock);
+  cfg.select_on_motion_lock = Number.isFinite(lock) ? Math.min(3600, Math.max(0, lock)) : 30;
   cfg.grid_columns = Math.min(4, Math.max(1, Number(cfg.grid_columns) || 2));
   cfg.snapshot_interval = Math.max(1, Number(cfg.snapshot_interval) || 5);
   cfg.motion_hold = Math.max(0, Number(cfg.motion_hold) || 0);
@@ -60,8 +73,33 @@ function normalizeConfig(config) {
     throw new Error("`strip_content` must be both, videos or snapshots");
   }
   cfg.strip = cfg.strip !== false;
+  cfg.strip_prefetch = cfg.strip_prefetch !== false;
   cfg.strip_limit = Math.min(100, Math.max(1, Math.floor(Number(cfg.strip_limit)) || 30));
   return cfg;
+}
+
+// Which camera entity a grid tile should show: "follow" tracks the HD/SD choice.
+// Falls back to the full-resolution camera when the low-res one is missing or unavailable.
+function pickThumbEntity(cam, thumbQuality, effectiveQuality, states) {
+  const q = thumbQuality === "follow" ? effectiveQuality : thumbQuality;
+  if (q === "low") {
+    const low = states && states[cam.low_entity];
+    if (low && low.state !== "unavailable") return cam.low_entity;
+  }
+  return cam.entity;
+}
+
+// Short fingerprint of a list of recordings, so an unchanged refresh doesn't redraw the strip.
+function fingerprint(items) {
+  let h = 5381;
+  const str = items.map((i) => i.id).join("|");
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return `${items.length}:${(h >>> 0).toString(36)}`;
+}
+
+// Index of the first camera whose motion flag just turned on, or -1.
+function firstRisingEdge(prev, flags) {
+  return flags.findIndex((m, n) => m && !(prev && prev[n]));
 }
 
 // motionEye default layout is <date dir>/<HH-MM-SS>.<ext>, e.g. 2026-11-22/19-04-16.mp4
@@ -165,8 +203,9 @@ button{font:inherit;color:inherit;cursor:pointer}
 .day{font-weight:500;padding:10px 4px 6px;color:var(--secondary-text-color);font-size:.9rem;border-bottom:1px solid var(--divider-color);margin-bottom:6px}
 .items{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:start}
 @media(min-width:600px){.items{grid-template-columns:repeat(5,minmax(0,1fr))}}
-.item{position:relative;aspect-ratio:var(--ar,16/9);border-radius:8px;overflow:hidden;background:#1b1b1b;border:0;padding:0}
+.item{position:relative;aspect-ratio:var(--item-ar,var(--ar,16/9));border-radius:8px;overflow:hidden;background:#1b1b1b;border:0;padding:0}
 .item img{width:100%;height:100%;object-fit:contain}
+.item.loaded .ph{display:none}
 .item .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#888}
 .item .t{position:absolute;left:0;right:0;bottom:0;padding:10px 6px 3px;font-size:.75rem;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.7));text-align:left}
 .item .k{position:absolute;right:4px;top:4px;color:#fff;background:rgba(0,0,0,.5);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;--mdc-icon-size:14px}
@@ -174,7 +213,12 @@ button{font:inherit;color:inherit;cursor:pointer}
 .empty b{display:block;margin-bottom:4px;color:var(--primary-text-color)}
 .strip{display:flex;align-items:flex-start;gap:6px;overflow-x:auto;padding:6px 2px 2px;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity;scrollbar-width:thin}
 .strip .item{flex:0 0 120px;scroll-snap-align:start}
-.sempty{padding:14px 6px;font-size:.85rem;color:var(--secondary-text-color)}
+.sempty{align-self:center;padding:0 6px;font-size:.85rem;color:var(--secondary-text-color)}
+.item.spacer{visibility:hidden}
+.item.skel{background:linear-gradient(90deg,#1b1b1b 25%,#2a2a2a 40%,#1b1b1b 60%);background-size:300% 100%;animation:shimmer 1.4s ease-in-out infinite}
+.item.skel .ph{color:#3a3a3a}
+@keyframes shimmer{from{background-position:100% 50%}to{background-position:0 50%}}
+@media(prefers-reduced-motion:reduce){.item.skel{animation:none}}
 .modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.92);display:flex;flex-direction:column}
 .mbar{display:flex;align-items:center;gap:8px;padding:10px 12px;color:#fff}
 .mbar .sp{flex:1;font-size:.95rem}
@@ -209,7 +253,16 @@ class MotionEyeCameraCard extends HTMLElement {
     this._strip = {};
     this._stripSig = null;
     this._stripItems = [];
-    this._stripLoading = null;
+    this._stripBusy = new Set(); // cameras whose strip is being fetched right now
+    this._prefetching = false;
+    this._prefetchFail = {};
+    this._gen = 0; // bumped to abandon in-flight background work
+    this._refreshTimers = {};
+    this._arCache = {}; // camera entity -> "w / h" of its picture
+    this._blobs = new Map(); // thumbnail URL -> preloaded object URL
+    this._blobPending = new Map();
+    this._preQueue = [];
+    this._preActive = 0;
   }
 
   /* ---------- Lovelace API ---------- */
@@ -229,6 +282,7 @@ class MotionEyeCameraCard extends HTMLElement {
     if (this._sel >= this._config.cameras.length) this._sel = 0;
     this._tl = {};
     this._strip = {};
+    this._clearBackground();
     this._build();
     if (this._hass) this._afterHass();
   }
@@ -260,7 +314,10 @@ class MotionEyeCameraCard extends HTMLElement {
     this._onOnline = () => this._updateActive(true);
     window.addEventListener("online", this._onOnline);
     this._onNet = () => {
-      if (this._quality === "auto") this._connectMain(true);
+      if (this._quality === "auto") {
+        this._connectMain(true);
+        this._refreshThumbs();
+      }
     };
     navigator.connection?.addEventListener?.("change", this._onNet);
     this._onKey = (e) => {
@@ -283,6 +340,7 @@ class MotionEyeCameraCard extends HTMLElement {
     this._active = false;
     this._stopThumbs();
     this._detachMain();
+    this._clearBackground();
   }
 
   /* ---------- helpers ---------- */
@@ -412,12 +470,20 @@ class MotionEyeCameraCard extends HTMLElement {
       this._q("#msg").textContent = "";
       // match the tile to the camera's real aspect ratio so nothing is cropped or letterboxed
       const { naturalWidth: w, naturalHeight: h } = e.target;
-      if (w > 0 && h > 0) this._q("#main").style.setProperty("--ar", `${w} / ${h}`);
+      if (w > 0 && h > 0) {
+        this._q("#main").style.setProperty("--ar", `${w} / ${h}`);
+        // recording clips use one fixed shape (the selected camera's), whatever their thumbnail is
+        this.style.setProperty("--item-ar", `${w} / ${h}`);
+        this._arCache[this._cam().entity] = `${w} / ${h}`;
+      }
     };
     this._q("#mainImg").onerror = () => this._mainError();
     this._q("#picker").onclick = (e) => {
       const el = e.target.closest("[data-i]");
-      if (el) this._select(Number(el.dataset.i));
+      if (!el) return;
+      // a deliberate choice: don't let select-on-motion yank the view away for a while
+      this._lockUntil = Date.now() + this._config.select_on_motion_lock * 1000;
+      this._select(Number(el.dataset.i));
     };
     this._q("#tlFilter").onclick = (e) => {
       const f = e.target.closest("button")?.dataset.f;
@@ -442,8 +508,8 @@ class MotionEyeCameraCard extends HTMLElement {
     this._q("#mNext").onclick = () => this._openModal(this._modalIdx + 1);
 
     this._stripSig = null;
-    this._stripLoading = null;
     this._renderPicker();
+    this._renderStrip(); // placeholders straight away, so the layout never jumps
     this._updateQualityUi();
     this._mainKey = null;
     this._thumbKeys = [];
@@ -481,7 +547,10 @@ class MotionEyeCameraCard extends HTMLElement {
     this._subscribe();
     this._updateStatus();
     if (this._active) this._connectMain(false);
-    if (this._active && this._view === "live") this._loadStrip();
+    if (this._active && this._view === "live") {
+      this._loadStrip();
+      this._prefetchStrips();
+    }
   }
 
   _updateStatus() {
@@ -515,6 +584,11 @@ class MotionEyeCameraCard extends HTMLElement {
   _select(i) {
     if (i === this._sel) return;
     this._sel = i;
+    const ar = this._arCache[this._cam().entity];
+    if (ar) {
+      this._q("#main").style.setProperty("--ar", ar);
+      this.style.setProperty("--item-ar", ar);
+    }
     this._updateSelectionUi();
     this._updateStatus();
     this._connectMain(true);
@@ -541,6 +615,7 @@ class MotionEyeCameraCard extends HTMLElement {
     }
     this._updateQualityUi();
     this._connectMain(true);
+    this._refreshThumbs(); // tiles follow the new quality straight away
   }
 
   _toggleFullscreen() {
@@ -635,11 +710,7 @@ class MotionEyeCameraCard extends HTMLElement {
   }
 
   _thumbEntity(cam) {
-    if (this._config.thumb_low_res) {
-      const low = this._hass.states[cam.low_entity];
-      if (low && low.state !== "unavailable") return cam.low_entity;
-    }
-    return cam.entity;
+    return pickThumbEntity(cam, this._config.thumb_quality, this._effectiveQuality(), this._hass.states);
   }
 
   _refreshThumbs() {
@@ -693,17 +764,23 @@ class MotionEyeCameraCard extends HTMLElement {
       el.classList.toggle("motion", !!flags[Number(el.dataset.i)]);
     });
     this._q("#anyMotion").hidden = !any;
-    // a new motion event means new media soon: refresh the timeline shortly after
-    if (flags[this._sel] && !this._wasMotion) {
-      clearTimeout(this._tlTimer);
-      this._tlTimer = setTimeout(() => {
-        delete this._tl[this._cam().entity];
-        delete this._strip[this._cam().entity];
-        if (this._view === "timeline") this._loadTimeline(true);
-        else this._loadStrip(true);
-      }, 20000);
+    // select-on-motion: a camera that has just started detecting motion becomes the main camera.
+    // _prevMotion is stored first, so the re-entrant call made by _select() sees no new edge.
+    const prev = this._prevMotion || [];
+    this._prevMotion = flags;
+    // new recordings usually appear ~20s after motion starts: refresh that camera's lists then
+    flags.forEach((m, n) => {
+      if (m && !prev[n]) this._scheduleRecordingsRefresh(this._cam(n));
+    });
+    if (
+      this._config.select_on_motion &&
+      this._view === "live" &&
+      !this._modalOpen &&
+      Date.now() >= (this._lockUntil || 0)
+    ) {
+      const i = firstRisingEdge(prev, flags);
+      if (i >= 0 && i !== this._sel) this._select(i);
     }
-    this._wasMotion = flags[this._sel];
   }
 
   _subscribe() {
@@ -1007,7 +1084,7 @@ class MotionEyeCameraCard extends HTMLElement {
 
   // size a tile to its image's real aspect ratio so nothing is cropped or letterboxed
   _applyFit(img) {
-    const tile = img.closest(".thumb, .item");
+    const tile = img.closest(".thumb");
     const { naturalWidth: w, naturalHeight: h } = img;
     if (!tile || !(w > 0 && h > 0)) return;
     const ar = `${w} / ${h}`;
@@ -1021,10 +1098,11 @@ class MotionEyeCameraCard extends HTMLElement {
   _lazyThumbs(container, ioKey, root, margin) {
     this[ioKey]?.disconnect();
     container.querySelectorAll("img[data-src]").forEach((img) => {
-      img.onload = () => this._applyFit(img);
+      img.onload = () => img.closest(".item")?.classList.add("loaded"); // hides the icon placeholder
+      img.onerror = () => img.remove(); // broken thumbnail: the small icon placeholder stays
     });
     const load = (img) =>
-      this._signedUrl(img.dataset.src)
+      this._thumbSrc(img.dataset.src)
         .then((u) => {
           if (u) img.src = u;
         })
@@ -1049,33 +1127,177 @@ class MotionEyeCameraCard extends HTMLElement {
 
   /* ---------- recordings strip (under the main image) ---------- */
 
-  async _loadStrip(force = false) {
-    const c = this._config;
-    if (!c.strip || !this._hass) return;
-    const cam = this._cam();
-    const key = cam.entity;
-    const cached = this._strip[key];
-    if (!force && cached && Date.now() - cached.at < 120000) {
-      this._renderStrip();
-      return;
-    }
-    if (!force && this._stripLoading === key) return;
-    this._stripLoading = key;
-    this._renderStrip();
-    const lim = c.strip_limit;
-    try {
-      const src = await this._findKinds(cam);
-      const [movies, images] = await Promise.all([
-        c.strip_content !== "snapshots" && src.movies ? this._collect(src.movies, lim, [], "video") : [],
-        c.strip_content !== "videos" && src.images ? this._collect(src.images, lim, [], "image") : [],
-      ]);
-      this._strip[key] = { at: Date.now(), items: [...movies, ...images].sort(byTsDesc).slice(0, lim), error: null };
-    } catch (e) {
-      this._strip[key] = { at: Date.now(), items: [], error: e?.message || String(e) };
-    }
-    if (this._stripLoading === key) this._stripLoading = null;
-    this._renderStrip();
+  _stripFresh(d) {
+    return !!d && Date.now() - d.at < (d.error ? STRIP_ERROR_TTL : STRIP_TTL);
   }
+
+  // Show the strip at once (cached data even if stale, otherwise placeholders), then refresh
+  // it in the background if it is out of date.
+  async _loadStrip(force = false) {
+    if (!this._config.strip || !this._hass) return;
+    const cam = this._cam();
+    this._renderStrip();
+    if (!force && this._stripFresh(this._strip[cam.entity])) return;
+    await this._refreshStrip(cam);
+  }
+
+  async _fetchStrip(cam) {
+    const c = this._config;
+    const lim = c.strip_limit;
+    const src = await this._findKinds(cam);
+    const [movies, images] = await Promise.all([
+      c.strip_content !== "snapshots" && src.movies ? this._collect(src.movies, lim, [], "video") : [],
+      c.strip_content !== "videos" && src.images ? this._collect(src.images, lim, [], "image") : [],
+    ]);
+    const items = [...movies, ...images].sort(byTsDesc).slice(0, lim);
+    return { at: Date.now(), items, error: null, fp: fingerprint(items) };
+  }
+
+  async _refreshStrip(cam) {
+    const key = cam.entity;
+    if (this._stripBusy.has(key)) return;
+    this._stripBusy.add(key);
+    const gen = this._gen;
+    const old = this._strip[key];
+    try {
+      const entry = await this._fetchStrip(cam);
+      if (gen !== this._gen) return;
+      this._strip[key] = entry;
+      this._preloadStripThumbs(entry.items);
+    } catch (e) {
+      if (gen !== this._gen) return;
+      // if a refresh fails, keep showing what we already have
+      this._strip[key] =
+        old && !old.error
+          ? { ...old, at: Date.now() }
+          : { at: Date.now(), items: [], error: e?.message || String(e), fp: "error" };
+    } finally {
+      this._stripBusy.delete(key);
+    }
+    if (gen === this._gen && this._cam().entity === key) this._renderStrip();
+  }
+
+  // Load the other cameras' strips one at a time, so switching camera is instant.
+  async _prefetchStrips() {
+    const c = this._config;
+    if (!c.strip || !c.strip_prefetch || this._prefetching || c.cameras.length < 2) return;
+    const selected = this._cam().entity;
+    if (!this._strip[selected]) return; // the camera on screen always goes first
+    const now = Date.now();
+    const todo = c.cameras.filter((cam) => {
+      if (cam.entity === selected || this._stripFresh(this._strip[cam.entity])) return false;
+      const failed = this._prefetchFail[cam.entity];
+      return !(failed && now - failed < 300000); // don't hammer a camera that keeps failing
+    });
+    if (!todo.length) return;
+    this._prefetching = true;
+    const gen = this._gen;
+    try {
+      for (const cam of todo) {
+        if (gen !== this._gen || !this._active || this._view !== "live") break;
+        await this._refreshStrip(cam);
+        if (this._strip[cam.entity]?.error) this._prefetchFail[cam.entity] = Date.now();
+        await new Promise((r) => setTimeout(r, 400)); // be gentle with Home Assistant and motionEye
+      }
+    } finally {
+      if (gen === this._gen) this._prefetching = false;
+    }
+  }
+
+  _scheduleRecordingsRefresh(cam) {
+    clearTimeout(this._refreshTimers[cam.entity]);
+    this._refreshTimers[cam.entity] = setTimeout(() => {
+      delete this._tl[cam.entity];
+      const selected = this._cam().entity === cam.entity;
+      if (selected && this._view === "timeline") this._loadTimeline(true);
+      else if (selected) this._loadStrip(true);
+      if (!selected || this._view === "timeline") {
+        // mark stale: refreshed in the background (or when this camera is next selected)
+        if (this._strip[cam.entity]) this._strip[cam.entity].at = 0;
+      }
+    }, 20000);
+  }
+
+  /* ---------- background thumbnail preloading ---------- */
+
+  _preloadStripThumbs(items) {
+    // on a slow or data-saving connection only the thumbnails you can see are fetched
+    if (this._effectiveQuality() === "low") return;
+    for (const it of items.slice(0, PRELOAD_PER_CAMERA)) if (it.thumb) this._preloadThumb(it.thumb);
+  }
+
+  _preloadThumb(raw) {
+    if (this._blobs.has(raw) || this._blobPending.has(raw)) return;
+    let done;
+    this._blobPending.set(raw, new Promise((r) => (done = r)));
+    this._preQueue.push({ raw, done });
+    this._pumpPreload();
+  }
+
+  _pumpPreload() {
+    while (this._preActive < 2 && this._preQueue.length) {
+      const { raw, done } = this._preQueue.shift();
+      const gen = this._gen;
+      this._preActive++;
+      this._signedUrl(raw)
+        .then((url) => fetch(url))
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.blob();
+        })
+        .then((blob) => {
+          if (gen === this._gen) this._storeBlob(raw, blob);
+        })
+        .catch(() => {})
+        .finally(() => {
+          this._blobPending.delete(raw);
+          this._preActive--;
+          done();
+          this._pumpPreload();
+        });
+    }
+  }
+
+  _storeBlob(raw, blob) {
+    this._blobs.set(raw, URL.createObjectURL(blob));
+    if (this._blobs.size > MAX_BLOBS) {
+      const [oldKey, oldUrl] = this._blobs.entries().next().value;
+      URL.revokeObjectURL(oldUrl);
+      this._blobs.delete(oldKey);
+    }
+  }
+
+  // The image URL to use for a thumbnail: the preloaded copy if there is one.
+  async _thumbSrc(raw) {
+    if (this._blobs.has(raw)) return this._blobs.get(raw);
+    if (this._blobPending.has(raw)) {
+      const queued = this._preQueue.findIndex((x) => x.raw === raw);
+      if (queued >= 0) {
+        // not started yet: a thumbnail you can see goes ahead of the background queue
+        const [job] = this._preQueue.splice(queued, 1);
+        this._blobPending.delete(raw);
+        job.done();
+      } else {
+        await this._blobPending.get(raw); // already downloading: reuse it
+        if (this._blobs.has(raw)) return this._blobs.get(raw);
+      }
+    }
+    return this._signedUrl(raw);
+  }
+
+  _clearBackground() {
+    this._gen++; // abandon any in-flight background work
+    this._prefetching = false;
+    for (const t of Object.values(this._refreshTimers)) clearTimeout(t);
+    this._refreshTimers = {};
+    for (const job of this._preQueue) job.done();
+    this._preQueue = [];
+    this._blobPending.clear();
+    for (const u of this._blobs.values()) URL.revokeObjectURL(u);
+    this._blobs.clear();
+  }
+
+  /* ---------- recordings strip rendering ---------- */
 
   _stripLabel(it) {
     const t = it.time || it.title;
@@ -1085,6 +1307,18 @@ class MotionEyeCameraCard extends HTMLElement {
     return `${day} ${t}`;
   }
 
+  // Same-size stand-ins for clips, so the strip keeps its height while loading and in empty states
+  _stripPlaceholders() {
+    return Array.from(
+      { length: 8 },
+      () => `<div class="item skel" aria-hidden="true"><div class="ph"><ha-icon icon="mdi:image-outline"></ha-icon></div></div>`
+    ).join("");
+  }
+
+  _stripMessage(html) {
+    return `<div class="item spacer" aria-hidden="true"></div><div class="sempty">${html}</div>`;
+  }
+
   _renderStrip() {
     const el = this._q("#strip");
     if (!el) return;
@@ -1092,23 +1326,23 @@ class MotionEyeCameraCard extends HTMLElement {
     if (!this._config.strip) return;
     const key = this._cam().entity;
     const d = this._strip[key];
-    const loading = this._stripLoading === key;
-    const sig = `${key}|${d ? d.at : 0}|${loading}`;
+    const sig = `${key}|${d ? d.fp : "none"}`;
     if (sig === this._stripSig) return;
     const sameCam = this._stripSig?.split("|")[0] === key;
     const keepScroll = sameCam ? el.scrollLeft : 0;
     this._stripSig = sig;
     this._stripItems = d ? d.items : [];
     if (!d) {
-      el.innerHTML = loading ? `<div class="sempty">Loading recordings…</div>` : "";
+      el.innerHTML = this._stripPlaceholders();
+      el.scrollLeft = 0;
       return;
     }
     if (d.error) {
-      el.innerHTML = `<div class="sempty">Recordings unavailable: ${esc(d.error)}</div>`;
+      el.innerHTML = this._stripMessage(`Recordings unavailable: ${esc(d.error)}`);
       return;
     }
     if (!d.items.length) {
-      el.innerHTML = `<div class="sempty">No recordings yet</div>`;
+      el.innerHTML = this._stripMessage("No recordings yet");
       return;
     }
     el.innerHTML = d.items
@@ -1206,6 +1440,14 @@ class MotionEyeCameraCardEditor extends HTMLElement {
             ]),
           },
           { name: "thumb_mode", selector: sel([{ value: "snapshot", label: "Snapshots" }, { value: "stream", label: "Live streams" }]) },
+          {
+            name: "thumb_quality",
+            selector: sel([
+              { value: "follow", label: "Follow HD/SD button" },
+              { value: "low", label: "Always low-res (SD)" },
+              { value: "normal", label: "Always full-res (HD)" },
+            ]),
+          },
           { name: "grid_columns", selector: { number: { min: 1, max: 4, mode: "box" } } },
           { name: "snapshot_interval", selector: { number: { min: 1, max: 60, unit_of_measurement: "s", mode: "box" } } },
           { name: "motion_hold", selector: { number: { min: 0, max: 600, unit_of_measurement: "s", mode: "box" } } },
@@ -1221,8 +1463,10 @@ class MotionEyeCameraCardEditor extends HTMLElement {
           { name: "strip_limit", selector: { number: { min: 1, max: 100, mode: "box" } } },
         ],
       },
-      { name: "thumb_low_res", selector: { boolean: {} } },
+      { name: "select_on_motion", selector: { boolean: {} } },
+      { name: "select_on_motion_lock", selector: { number: { min: 0, max: 3600, unit_of_measurement: "s", mode: "box" } } },
       { name: "strip", selector: { boolean: {} } },
+      { name: "strip_prefetch", selector: { boolean: {} } },
       { name: "timeline", selector: { boolean: {} } },
     ];
   }
@@ -1243,9 +1487,12 @@ class MotionEyeCameraCardEditor extends HTMLElement {
           motion_hold: "Motion indicator hold",
           timeline_days: "Timeline days (0 = all)",
           strip: "Show recordings strip under the main image",
+          strip_prefetch: "Load other cameras' recordings in the background",
           strip_content: "Strip content",
           strip_limit: "Strip items",
-          thumb_low_res: "Use low-res proxy cameras for thumbnails",
+          thumb_quality: "Grid tile quality",
+          select_on_motion: "Select a camera as the main camera when it detects motion",
+          select_on_motion_lock: "Pause auto-select after you pick a camera",
           timeline: "Show timeline tab",
         }[s.name] || s.name);
       this._form.addEventListener("value-changed", (ev) => {
@@ -1290,6 +1537,7 @@ class MotionEyeCameraCardEditor extends HTMLElement {
       type: this._config.type || `custom:${CARD_TAG}`,
       cameras: (camera_entities || []).map((e) => existing.get(e) || e),
     };
+    delete config.thumb_low_res; // replaced by thumb_quality in 1.1.0
     this._config = config;
     this._yaml.querySelector("pre").textContent = proxyYaml(this._entities());
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
@@ -1314,5 +1562,16 @@ if (typeof window !== "undefined" && typeof customElements !== "undefined" && !c
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { normalizeConfig, normalizeCamera, parseTimestamp, proxyYaml, byTsDesc, DEFAULT_CONFIG };
+  module.exports = {
+    normalizeConfig,
+    normalizeCamera,
+    parseTimestamp,
+    proxyYaml,
+    byTsDesc,
+    pickThumbEntity,
+    firstRisingEdge,
+    fingerprint,
+    MotionEyeCameraCard,
+    DEFAULT_CONFIG,
+  };
 }

@@ -6,14 +6,17 @@ title: Cameras
 layout: grid                  # grid | single
 default_quality: auto         # auto | normal | low
 thumb_mode: snapshot          # snapshot | stream
-thumb_low_res: true
+thumb_quality: follow         # follow | low | normal
 snapshot_interval: 5          # seconds
 grid_columns: 2
 aspect_ratio: "16:9"
 motion_hold: 30               # seconds
+select_on_motion: false       # true = a camera becomes the main one when motion starts
+select_on_motion_lock: 30     # seconds to respect your own choice
 strip: true
 strip_content: both           # both | videos | snapshots
 strip_limit: 30
+strip_prefetch: true          # load other cameras' recordings in the background
 timeline: true
 timeline_days: 7              # 0 = all available days
 timeline_limit: 500           # per day, per type

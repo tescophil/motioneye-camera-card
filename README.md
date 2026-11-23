@@ -64,14 +64,17 @@ A fuller example is in [`examples/dashboard.yaml`](examples/dashboard.yaml).
 | `layout` | `grid` | `grid` (main image plus tile grid) or `single` (main image plus camera chips) |
 | `default_quality` | `auto` | `auto`, `normal` (HD) or `low` (SD). The header button cycles Auto, SD and HD, and the choice is remembered per browser. This setting is only the starting point until you pick one |
 | `thumb_mode` | `snapshot` | `snapshot` (tiles refresh as still images) or `stream` (a live MJPEG stream in every tile) |
-| `thumb_low_res` | `true` | Use the low-resolution proxy camera for grid tiles when it exists |
+| `thumb_quality` | `follow` | Which feed the grid tiles use: `follow` (same as the HD/SD button), `low` (always the low-res camera) or `normal` (always full-res) |
 | `snapshot_interval` | `5` | Seconds between tile refreshes in `snapshot` mode (minimum 1) |
 | `grid_columns` | `2` | Number of tile columns, 1 to 4 |
 | `aspect_ratio` | `16:9` | Shape of the tiles, and of the main image until its first frame arrives. After that, every image follows its camera's real aspect ratio |
 | `motion_hold` | `30` | Seconds to keep the motion indicator on after a motion event |
+| `select_on_motion` | `false` | Make a camera the main camera when it starts detecting motion (see [Select on motion](#select-on-motion)) |
+| `select_on_motion_lock` | `30` | Seconds after you pick a camera yourself during which select-on-motion leaves your choice alone (`0` = never wait) |
 | `strip` | `true` | Show the recordings strip under the main image |
 | `strip_content` | `both` | `both`, `videos` or `snapshots` |
 | `strip_limit` | `30` | Maximum items in the strip, 1 to 100 |
+| `strip_prefetch` | `true` | Load every camera's strip, and its first thumbnails, in the background so switching camera is instant (see [Background loading](#background-loading)) |
 | `timeline` | `true` | Show the Timeline tab |
 | `timeline_days` | `7` | How many of the newest days of recordings to load per camera. `0` loads every available day |
 | `timeline_limit` | `500` | Maximum videos and maximum snapshots loaded **per day**, per camera (up to 2000) |
@@ -111,7 +114,7 @@ The stream is closed whenever the card is scrolled out of view, the browser tab 
 
 Auto relies on the browser's network information, which is available in Chromium-based browsers and the Android app. iOS Safari doesn't provide it, so Auto always chooses HD there and you should pick SD by hand. Auto doesn't distinguish Wi-Fi from mobile data: a fast mobile connection is treated as fast.
 
-Only the main image switches quality. Grid tiles use the low-resolution cameras whenever `thumb_low_res` is on and they exist.
+The grid tiles follow the same choice by default (`thumb_quality: follow`): switching to SD changes both the main image and the tiles to the low-resolution feeds, and switching back restores full resolution. Set `thumb_quality` to `low` or `normal` if you want the tiles fixed either way. A tile whose low-resolution camera doesn't exist keeps showing full resolution.
 
 ### Low-resolution cameras
 
@@ -140,9 +143,29 @@ Motion is shown from either of these sources:
 
 The indicator stays on for `motion_hold` seconds after an event. New recordings usually appear about 20 seconds after motion starts, and the strip and timeline refresh themselves at that point.
 
+### Select on motion
+
+With `select_on_motion: true`, a camera that starts detecting motion becomes the main camera. Details:
+
+- It only acts when a camera's motion *starts*. A camera that stays in motion doesn't keep pulling the view back, and if several cameras start at once the first one in your list wins
+- It only acts on the Live tab, and not while a recording is open
+- If you tap a camera yourself, auto-select waits `select_on_motion_lock` seconds (default 30) before it can switch again, so it doesn't fight you
+- It uses the same motion sources as the indicator (the `motioneye.motion_detected` event or a `motion_entity`)
+
 ### Recordings strip
 
-Under the main image, a horizontal strip shows the selected camera's newest recordings first (leftmost). Scroll sideways to go back in time, and tap an item to open it. Use `strip_content` to show videos, snapshots or both. Items from earlier days show a short date before the time.
+Under the main image, a horizontal strip shows the selected camera's newest recordings first (leftmost). Scroll sideways to go back in time, and tap an item to open it. Use `strip_content` to show videos, snapshots or both. Items from earlier days show a short date before the time. Every clip is the same size, using the selected camera's shape. If motionEye has no thumbnail for a clip, a small video or photo icon is shown in its place.
+
+### Background loading
+
+So that tapping a different camera doesn't wait on motionEye, the card prepares the other cameras' strips ahead of time (`strip_prefetch`, on by default):
+
+- **Placeholders:** the strip is on screen from the first draw, as a row of same-size grey tiles while the recordings load. It doesn't resize or jump when the clips arrive, and the same goes for "No recordings yet" and error messages
+- **Other cameras:** once the selected camera's strip has loaded, the others are loaded one at a time, with a short pause between each, so Home Assistant and motionEye aren't hit all at once
+- **Thumbnails:** the first 8 thumbnails of each camera are downloaded in the background (two at a time, and always behind anything you can actually see) and kept in memory, so they appear immediately
+- **Always fresh:** strips refresh about every two minutes, and about 20 seconds after a camera detects motion. A refresh never blanks the strip. You keep seeing the current clips, and the strip only redraws if something has changed
+- **Data saving:** when the quality is SD (or Auto has chosen SD), thumbnails are not preloaded, only the ones you scroll to. The lists are still prefetched, as they're tiny
+- **Opting out:** set `strip_prefetch: false` if you'd rather the card only ever loads the camera on screen
 
 ### Timeline tab
 
@@ -163,6 +186,7 @@ Dates and times are read from motionEye's default `YYYY-MM-DD` folders with `HH-
 | Timeline says the camera wasn't found in the media source | Set `movies_source` and `images_source` on that camera. Browse the media in Home Assistant's Media panel to find the IDs |
 | Timeline shows fewer days than expected | Read the summary line. It says how many days were found and loaded, and whether any day was capped. Raise `timeline_days` or `timeline_limit` as it suggests |
 | Timeline or strip shows "Unknown date" | Your motionEye file or folder names aren't in the default date format |
+| A grid tile still shows the full-res picture in SD mode | That camera has no low-res copy. Check that `camera.<name>_low` exists, or set `low_entity` |
 | Tiles are different heights | Your cameras have different aspect ratios. Each tile follows its own camera's real shape |
 
 ## Limitations

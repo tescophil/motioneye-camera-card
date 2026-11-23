@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- **New:** `select_on_motion` makes a camera the main camera when it starts detecting motion, with `select_on_motion_lock` to leave your own choice alone for a while
+- **Changed:** grid tiles now follow the HD/SD button, so switching to SD changes the tiles as well as the main image. This replaces `thumb_low_res` with `thumb_quality` (`follow`, `low` or `normal`); an existing `thumb_low_res` setting is ignored
+- **New:** the recordings strip shows same-size placeholder tiles from the first draw (and keeps its height in empty and error states), so it no longer looks blank or jumps in size while loading
+- **New:** `strip_prefetch` loads every camera's strip and its first thumbnails in the background, so switching camera is instant. Strips refresh quietly without blanking, and thumbnails aren't preloaded on SD
+- **Fixed:** recording clips whose thumbnail was a generic placeholder were shown at a different size and broke the strip and timeline layout. All clips are now the same size
+
 ## 1.0.0
 
 Initial release.

@@ -10,6 +10,9 @@ const {
   parseTimestamp,
   proxyYaml,
   byTsDesc,
+  pickThumbEntity,
+  firstRisingEdge,
+  fingerprint,
   DEFAULT_CONFIG,
 } = require("../motioneye-camera-card.js");
 
@@ -99,4 +102,71 @@ test("strip options are validated and clamped", () => {
   assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], strip_content: "videos" }).strip_content, "videos");
   assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], strip_limit: 5000 }).strip_limit, 100);
   assert.throws(() => normalizeConfig({ cameras: ["camera.a"], strip_content: "movies" }));
+});
+
+test("thumb_quality defaults to follow; select_on_motion is off with a 30s lock", () => {
+  const cfg = normalizeConfig({ cameras: ["camera.a"] });
+  assert.strictEqual(cfg.thumb_quality, "follow");
+  assert.strictEqual(cfg.select_on_motion, false);
+  assert.strictEqual(cfg.select_on_motion_lock, 30);
+});
+
+test("thumb_quality and select_on_motion options are validated and clamped", () => {
+  assert.throws(() => normalizeConfig({ cameras: ["camera.a"], thumb_quality: "medium" }));
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], thumb_quality: "low" }).thumb_quality, "low");
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], select_on_motion: true }).select_on_motion, true);
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], select_on_motion: "yes" }).select_on_motion, false);
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], select_on_motion_lock: 0 }).select_on_motion_lock, 0);
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], select_on_motion_lock: 99999 }).select_on_motion_lock, 3600);
+});
+
+test("a legacy thumb_low_res setting no longer affects anything", () => {
+  const cfg = normalizeConfig({ cameras: ["camera.a"], thumb_low_res: true });
+  assert.strictEqual(cfg.thumb_quality, "follow");
+});
+
+test("pickThumbEntity follows the effective quality", () => {
+  const cam = normalizeCamera("camera.garage");
+  const states = { "camera.garage_low": { state: "idle" } };
+  assert.strictEqual(pickThumbEntity(cam, "follow", "normal", states), "camera.garage");
+  assert.strictEqual(pickThumbEntity(cam, "follow", "low", states), "camera.garage_low");
+});
+
+test("pickThumbEntity honours fixed thumb_quality regardless of the HD/SD button", () => {
+  const cam = normalizeCamera("camera.garage");
+  const states = { "camera.garage_low": { state: "idle" } };
+  assert.strictEqual(pickThumbEntity(cam, "low", "normal", states), "camera.garage_low");
+  assert.strictEqual(pickThumbEntity(cam, "normal", "low", states), "camera.garage");
+});
+
+test("pickThumbEntity falls back to full-res when the low-res camera is missing or unavailable", () => {
+  const cam = normalizeCamera("camera.garage");
+  assert.strictEqual(pickThumbEntity(cam, "follow", "low", {}), "camera.garage");
+  assert.strictEqual(
+    pickThumbEntity(cam, "follow", "low", { "camera.garage_low": { state: "unavailable" } }),
+    "camera.garage"
+  );
+  assert.strictEqual(pickThumbEntity(cam, "follow", "low", undefined), "camera.garage");
+});
+
+test("firstRisingEdge finds only cameras whose motion just started", () => {
+  assert.strictEqual(firstRisingEdge([false, false, false], [false, true, false]), 1);
+  assert.strictEqual(firstRisingEdge([false, true, false], [false, true, false]), -1); // still moving
+  assert.strictEqual(firstRisingEdge([false, true, false], [false, true, true]), 2); // new one starts
+  assert.strictEqual(firstRisingEdge([true, false], [false, false]), -1); // motion ended
+  assert.strictEqual(firstRisingEdge(undefined, [false, true]), 1); // first run: already moving
+  assert.strictEqual(firstRisingEdge([], [false, false]), -1);
+});
+
+test("strip_prefetch defaults to on and can be turned off", () => {
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"] }).strip_prefetch, true);
+  assert.strictEqual(normalizeConfig({ cameras: ["camera.a"], strip_prefetch: false }).strip_prefetch, false);
+});
+
+test("fingerprint changes with the list of recordings, not with identical refreshes", () => {
+  const a = [{ id: "x" }, { id: "y" }];
+  assert.strictEqual(fingerprint(a), fingerprint([{ id: "x" }, { id: "y" }]));
+  assert.notStrictEqual(fingerprint(a), fingerprint([{ id: "y" }, { id: "x" }]));
+  assert.notStrictEqual(fingerprint(a), fingerprint([{ id: "x" }]));
+  assert.match(fingerprint([]), /^0:/);
 });
