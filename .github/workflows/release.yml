@@ -13,9 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Create GitHub release with the card attached
+      - name: Create the GitHub release, or attach the card to one that already exists
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$GITHUB_REF_NAME" motioneye-camera-card.js
-          --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" motioneye-camera-card.js --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" motioneye-camera-card.js \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
