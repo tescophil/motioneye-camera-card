@@ -97,6 +97,14 @@ function fingerprint(items) {
   return `${items.length}:${(h >>> 0).toString(36)}`;
 }
 
+// How to fit a thumbnail into a clip tile. A thumbnail whose shape is close to the tile's fills it
+// edge to edge (no thin letterbox bars); one that is very different, such as a generic placeholder
+// picture, is shown whole instead of being cropped.
+function fitMode(imgRatio, boxRatio) {
+  if (!(imgRatio > 0) || !(boxRatio > 0)) return "contain";
+  return Math.abs(imgRatio / boxRatio - 1) <= 0.15 ? "cover" : "contain";
+}
+
 // Index of the first camera whose motion flag just turned on, or -1.
 function firstRisingEdge(prev, flags) {
   return flags.findIndex((m, n) => m && !(prev && prev[n]));
@@ -206,6 +214,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .item{position:relative;aspect-ratio:var(--item-ar,var(--ar,16/9));border-radius:8px;overflow:hidden;background:#1b1b1b;border:0;padding:0}
 .item img{width:100%;height:100%;object-fit:contain}
 .item.loaded .ph{display:none}
+.item.cover img{object-fit:cover}
 .item .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#888}
 .item .t{position:absolute;left:0;right:0;bottom:0;padding:10px 6px 3px;font-size:.75rem;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.7));text-align:left}
 .item .k{position:absolute;right:4px;top:4px;color:#fff;background:rgba(0,0,0,.5);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;--mdc-icon-size:14px}
@@ -1098,7 +1107,14 @@ class MotionEyeCameraCard extends HTMLElement {
   _lazyThumbs(container, ioKey, root, margin) {
     this[ioKey]?.disconnect();
     container.querySelectorAll("img[data-src]").forEach((img) => {
-      img.onload = () => img.closest(".item")?.classList.add("loaded"); // hides the icon placeholder
+      img.onload = () => {
+        const item = img.closest(".item");
+        if (!item) return;
+        item.classList.add("loaded"); // hides the icon placeholder
+        const { naturalWidth: w, naturalHeight: h } = img;
+        const box = item.clientWidth && item.clientHeight ? item.clientWidth / item.clientHeight : 16 / 9;
+        item.classList.toggle("cover", fitMode(w / h, box) === "cover");
+      };
       img.onerror = () => img.remove(); // broken thumbnail: the small icon placeholder stays
     });
     const load = (img) =>
@@ -1571,6 +1587,7 @@ if (typeof module !== "undefined" && module.exports) {
     pickThumbEntity,
     firstRisingEdge,
     fingerprint,
+    fitMode,
     MotionEyeCameraCard,
     DEFAULT_CONFIG,
   };

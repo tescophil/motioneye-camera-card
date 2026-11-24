@@ -13,6 +13,7 @@ const {
   pickThumbEntity,
   firstRisingEdge,
   fingerprint,
+  fitMode,
   DEFAULT_CONFIG,
 } = require("../motioneye-camera-card.js");
 
@@ -169,4 +170,14 @@ test("fingerprint changes with the list of recordings, not with identical refres
   assert.notStrictEqual(fingerprint(a), fingerprint([{ id: "y" }, { id: "x" }]));
   assert.notStrictEqual(fingerprint(a), fingerprint([{ id: "x" }]));
   assert.match(fingerprint([]), /^0:/);
+});
+
+test("fitMode fills the tile when the thumbnail is close to its shape, otherwise shows it whole", () => {
+  assert.strictEqual(fitMode(16 / 9, 1.7), "cover"); // slightly different shape: no letterbox bars
+  assert.strictEqual(fitMode(1.7, 1.7), "cover");
+  assert.strictEqual(fitMode(1.0, 1.7), "contain"); // near-square placeholder picture
+  assert.strictEqual(fitMode(4 / 3, 16 / 9), "contain");
+  assert.strictEqual(fitMode(0, 1.7), "contain");
+  assert.strictEqual(fitMode(NaN, 1.7), "contain");
+  assert.strictEqual(fitMode(1.7, 0), "contain");
 });
