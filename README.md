@@ -17,6 +17,14 @@ A Lovelace card for Home Assistant that turns your [motionEye](https://github.co
 - **No cropping**: every image keeps its camera's real aspect ratio, so on-screen timestamps stay visible
 - Visual editor, no build step, no dependencies
 
+## Screenshots
+
+| Live view | Timeline |
+| --- | --- |
+| ![Live view: a large main camera image with a motion indicator, a strip of recent recordings underneath and a grid of the other cameras](https://raw.githubusercontent.com/tescophil/motioneye-camera-card/main/docs/images/live-view.jpg) | ![Timeline: videos and snapshots grouped by day, with a summary of how many days were loaded](https://raw.githubusercontent.com/tescophil/motioneye-camera-card/main/docs/images/timeline.jpg) |
+
+The **Live** view (left) shows the selected camera with its latest recordings in a scrolling strip, and a grid of the other cameras. Tap a tile to make it the main camera. A pulsing red outline marks a camera that is detecting motion. The **Timeline** (right) lists the selected camera's videos and snapshots by day.
+
 ## Requirements
 
 - Home Assistant with the core [motionEye integration](https://www.home-assistant.io/integrations/motioneye/) set up (this provides the `camera.*` entities, the MJPEG streams and the media browser)
