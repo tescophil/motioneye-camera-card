@@ -172,10 +172,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 @keyframes blink{from{opacity:1}to{opacity:.25}}
 @keyframes pulse{from{box-shadow:0 0 0 0 rgba(219,68,55,.7)}to{box-shadow:0 0 8px 2px rgba(219,68,55,.9)}}
 .live{padding:0 8px 8px}
-.tile{position:relative;overflow:hidden;background:#000;border-radius:var(--ha-card-border-radius,12px);aspect-ratio:var(--ar,16/9);border:2px solid transparent;padding:0;display:block;width:100%}
+.tile{position:relative;overflow:hidden;background:#000;border-radius:var(--ha-card-border-radius,12px);aspect-ratio:var(--ar,16/9);border:0;padding:0;display:block;width:100%}
 .main img{object-fit:contain}
 .tile img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
-.main.motion,.thumb.motion{border-color:var(--error-color,#db4437);animation:pulse 1s infinite alternate}
+.main.motion,.thumb.motion{outline:2px solid var(--error-color,#db4437);animation:pulse 1s infinite alternate}
 .main.expanded{position:fixed;inset:0;z-index:9999;border-radius:0;aspect-ratio:auto;width:100%;height:100%}
 .label{position:absolute;left:0;right:0;bottom:0;padding:14px 10px 6px;text-align:left;font-weight:500;color:#fff;text-shadow:0 1px 3px #000;background:linear-gradient(transparent,rgba(0,0,0,.65));pointer-events:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .main .label{font-size:1.15rem;padding-right:70px}
@@ -190,8 +190,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 .note{margin:6px 4px 0;font-size:.8rem;color:var(--secondary-text-color)}
 .grid{display:grid;grid-template-columns:repeat(var(--cols,2),minmax(0,1fr));gap:6px;margin-top:6px;align-items:start}
 .thumb{cursor:pointer;background:#111}
-.thumb.sel{border-color:var(--primary-color)}
-.thumb.motion.sel{border-color:var(--error-color,#db4437)}
+.thumb.sel{outline:2px solid var(--primary-color)}
+.thumb.motion.sel{outline-color:var(--error-color,#db4437)}
 .thumb.off img{opacity:.25}
 .chips{display:flex;gap:6px;overflow-x:auto;padding:8px 2px 2px}
 .chip{border:1px solid var(--divider-color);background:none;border-radius:999px;padding:5px 12px;white-space:nowrap;font-size:.9rem;position:relative}
