@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- **New:** per-camera options can now be set in the visual editor. A **Camera options** section has a collapsible panel for each camera with its display name, low-res camera and motion sensor (`name`, `low_entity`, `motion_entity`), so these no longer need YAML. Blank fields use the defaults
+- **Fixed:** the editor label for the timeline bar said it sits under the strip
+
 ## 1.2.0
 
 - **New:** a compact 24-hour timeline bar above the recordings strip, in the style of a CCTV player. It always shows the last 24 hours with the current time at the far left. Light green blocks show when recordings exist, indigo ticks are videos, dark navy ticks are snapshots, and a pink cursor marks the recording you last opened

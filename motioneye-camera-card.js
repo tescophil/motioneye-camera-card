@@ -5,7 +5,7 @@
  * No build step, no dependencies.  MIT licence.
  */
 
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.2.1";
 const CARD_TAG = "motioneye-camera-card";
 const QUALITY_KEY = "motioneye-camera-card:quality";
 const STRIP_TTL = 120000; // ms before a camera's recordings strip is refreshed in the background
@@ -45,6 +45,22 @@ function normalizeCamera(c) {
     throw new Error(`Invalid camera entry: ${JSON.stringify(c)}`);
   }
   return { low_entity: `${c.entity}_low`, ...c };
+}
+
+// Per-camera options the visual editor can set (anything else in a camera entry is kept as it is).
+const CAMERA_FIELDS = ["name", "low_entity", "motion_entity"];
+
+// Build a config entry for one camera: a plain entity id when nothing is customised, otherwise an object.
+function buildCamera(entity, existing, fields) {
+  const base = existing && typeof existing === "object" ? { ...existing } : {};
+  delete base.entity;
+  for (const k of CAMERA_FIELDS) delete base[k];
+  const out = { entity, ...base };
+  for (const k of CAMERA_FIELDS) {
+    const v = fields && typeof fields[k] === "string" ? fields[k].trim() : "";
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length === 1 ? entity : out;
 }
 
 function normalizeConfig(config) {
@@ -1865,6 +1881,74 @@ class MotionEyeCameraCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (this._form) this._form.hass = hass;
+    (this._camForms || []).forEach((f) => (f.hass = hass));
+  }
+
+  _camSchema() {
+    return [
+      { name: "name", selector: { text: {} } },
+      { name: "low_entity", selector: { entity: { domain: "camera" } } },
+      { name: "motion_entity", selector: { entity: { domain: ["binary_sensor", "input_boolean"] } } },
+    ];
+  }
+
+  // One collapsible section per camera for its own options (name, low-res camera, motion sensor).
+  _renderCameras() {
+    const box = this._camBox;
+    const entities = this._entities();
+    const key = JSON.stringify(this._config.cameras || []);
+    if (this._camKey === key) return; // nothing changed from outside, so leave what the user is typing alone
+    this._camKey = key;
+    box.innerHTML = "";
+    this._camForms = [];
+    if (!entities.length) return;
+    const h = document.createElement("div");
+    h.style.cssText = "font-weight:500;margin:16px 0 4px";
+    h.textContent = "Camera options";
+    box.appendChild(h);
+    (this._config.cameras || []).forEach((cam) => {
+      const entity = typeof cam === "string" ? cam : cam.entity;
+      if (!entity) return;
+      const obj = typeof cam === "string" ? {} : cam;
+      const det = document.createElement("details");
+      det.style.cssText = "border:1px solid var(--divider-color);border-radius:8px;padding:4px 12px;margin-bottom:8px";
+      const sum = document.createElement("summary");
+      sum.style.cssText = "cursor:pointer;padding:8px 0";
+      sum.textContent = obj.name ? `${obj.name} (${entity})` : entity;
+      det.appendChild(sum);
+      const form = document.createElement("ha-form");
+      form.hass = this._hass;
+      form.schema = this._camSchema();
+      form.computeLabel = (sc) =>
+        ({
+          name: "Display name (blank = the camera's name)",
+          low_entity: `Low-res camera (blank = camera.${entity.slice(7)}_low)`,
+          motion_entity: "Motion sensor (blank = motionEye motion events)",
+        }[sc.name] || sc.name);
+      form.data = { name: obj.name || "", low_entity: obj.low_entity || "", motion_entity: obj.motion_entity || "" };
+      form.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        this._cameraChanged(entity, ev.detail.value);
+      });
+      det.appendChild(form);
+      box.appendChild(det);
+      this._camForms.push(form);
+    });
+  }
+
+  _cameraChanged(entity, fields) {
+    const cameras = (this._config.cameras || []).map((c) => {
+      const e = typeof c === "string" ? c : c.entity;
+      return e === entity ? buildCamera(entity, c, fields) : c;
+    });
+    this._emit({ ...this._config, cameras }, false);
+  }
+
+  _emit(config, rebuildCameras = true) {
+    this._config = config;
+    if (!rebuildCameras) this._camKey = JSON.stringify(config.cameras || []); // keep the open forms as they are
+    this._yaml.querySelector("pre").textContent = proxyYaml(this._entities());
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
   }
 
   _entities() {
@@ -1939,7 +2023,7 @@ class MotionEyeCameraCardEditor extends HTMLElement {
           timeline_days: "Timeline days (0 = all)",
           strip: "Show recordings strip under the main image",
           strip_prefetch: "Load other cameras' recordings in the background",
-          timeline_bar: "Show the 24-hour timeline bar under the strip",
+          timeline_bar: "Show the 24-hour timeline bar above the strip",
           strip_content: "Strip content",
           strip_limit: "Strip items",
           thumb_quality: "Grid tile quality",
@@ -1952,6 +2036,8 @@ class MotionEyeCameraCardEditor extends HTMLElement {
         this._changed(ev.detail.value);
       });
       this.appendChild(this._form);
+      this._camBox = document.createElement("div");
+      this.appendChild(this._camBox);
       this._yaml = document.createElement("details");
       this._yaml.style.marginTop = "16px";
       this._yaml.innerHTML = `<summary style="cursor:pointer">Low-resolution proxy cameras (YAML)</summary>
@@ -1978,6 +2064,7 @@ class MotionEyeCameraCardEditor extends HTMLElement {
       camera_entities: this._entities(),
     };
     this._yaml.querySelector("pre").textContent = proxyYaml(this._entities());
+    this._renderCameras();
   }
 
   _changed(value) {
@@ -1990,9 +2077,8 @@ class MotionEyeCameraCardEditor extends HTMLElement {
       cameras: (camera_entities || []).map((e) => existing.get(e) || e),
     };
     delete config.thumb_low_res; // replaced by thumb_quality in 1.1.0
-    this._config = config;
-    this._yaml.querySelector("pre").textContent = proxyYaml(this._entities());
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+    this._emit(config, true);
+    this._renderCameras();
   }
 }
 
@@ -2017,6 +2103,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     normalizeConfig,
     normalizeCamera,
+    buildCamera,
     parseTimestamp,
     proxyYaml,
     byTsDesc,

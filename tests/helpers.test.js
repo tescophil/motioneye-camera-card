@@ -236,3 +236,25 @@ test("rollingMarks starts at Now and labels whole hours going back", () => {
   assert.ok(m.every((x) => x.frac >= 0 && x.frac < 1));
   assert.equal(m.length, 8);
 });
+
+// ---- per-camera options in the visual editor ----
+test("buildCamera keeps a plain entity id when nothing is customised", () => {
+  assert.equal(bar.buildCamera("camera.a", "camera.a", {}), "camera.a");
+  assert.equal(bar.buildCamera("camera.a", { entity: "camera.a", name: "Old" }, { name: "  ", low_entity: "" }), "camera.a");
+});
+
+test("buildCamera sets, trims and clears options and keeps unknown keys", () => {
+  const c = bar.buildCamera("camera.g", { entity: "camera.g", extra: 1, name: "Old" }, {
+    name: " Garage ",
+    low_entity: "camera.garage_sd",
+    motion_entity: "binary_sensor.garage_motion",
+  });
+  assert.deepEqual(c, {
+    entity: "camera.g",
+    extra: 1,
+    name: "Garage",
+    low_entity: "camera.garage_sd",
+    motion_entity: "binary_sensor.garage_motion",
+  });
+  assert.deepEqual(bar.buildCamera("camera.g", c, { name: "Garage" }), { entity: "camera.g", extra: 1, name: "Garage" });
+});

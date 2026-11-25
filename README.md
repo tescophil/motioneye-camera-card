@@ -16,7 +16,7 @@ A Lovelace card for Home Assistant that turns your [motionEye](https://github.co
 - **SD / HD / Auto**: switch to low-resolution streams on slow connections using Home Assistant's `proxy` camera platform
 - **Mobile-friendly**: streams stop when the card is off-screen or the app is in the background; grid tiles use refreshed snapshots rather than many parallel streams
 - **No cropping**: every image keeps its camera's real aspect ratio, so on-screen timestamps stay visible
-- Visual editor, no build step, no dependencies
+- Visual editor (including each camera's name, low-res camera and motion sensor), no build step, no dependencies
 
 ## Screenshots
 
@@ -107,6 +107,8 @@ cameras:
 | `low_entity` | `<entity>_low` | The low-resolution proxy camera to use for SD |
 | `motion_entity` | none | A `binary_sensor` that is `on` while motion is detected |
 | `movies_source` / `images_source` | auto | `media-source://motioneye/...` IDs for this camera's videos and snapshots. Only needed if automatic discovery can't find them |
+
+In the visual editor, pick your cameras and then open a camera under **Camera options** to set its `name`, `low_entity` and `motion_entity`. Leaving a field blank uses the default, and a camera with no custom options is saved as a plain entity id. `movies_source` and `images_source` are advanced options that are only available in YAML.
 
 ## How it works
 
