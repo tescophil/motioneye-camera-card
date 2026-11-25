@@ -10,6 +10,7 @@ A Lovelace card for Home Assistant that turns your [motionEye](https://github.co
 - **Live MJPEG main view** from the camera entities created by Home Assistant's core `motioneye` integration
 - **Grid layout**: a large main image with a tile grid below it. Tap a tile to promote that camera to the main view. A `single` layout with camera chips is also available
 - **Recordings strip**: a horizontal, scrolling strip of the selected camera's latest videos and/or snapshots under the main image, newest first
+- **24-hour timeline bar**: a slim bar above the strip showing when the camera recorded over the last day. Tap it to open a recording; a box on it follows what is visible in the strip
 - **Timeline tab**: all recent videos and snapshots, grouped by day, with an in-card player and viewer
 - **Motion indication**: pulsing border and badge on the camera, plus a header alert when any camera sees motion
 - **SD / HD / Auto**: switch to low-resolution streams on slow connections using Home Assistant's `proxy` camera platform
@@ -83,6 +84,7 @@ A fuller example is in [`examples/dashboard.yaml`](examples/dashboard.yaml).
 | `strip_content` | `both` | `both`, `videos` or `snapshots` |
 | `strip_limit` | `30` | Maximum items in the strip, 1 to 100 |
 | `strip_prefetch` | `true` | Load every camera's strip, and its first thumbnails, in the background so switching camera is instant (see [Background loading](#background-loading)) |
+| `timeline_bar` | `true` | Show the 24-hour timeline bar above the recordings strip (see [24-hour timeline bar](#24-hour-timeline-bar)) |
 | `timeline` | `true` | Show the Timeline tab |
 | `timeline_days` | `7` | How many of the newest days of recordings to load per camera. `0` loads every available day |
 | `timeline_limit` | `500` | Maximum videos and maximum snapshots loaded **per day**, per camera (up to 2000) |
@@ -174,6 +176,17 @@ So that tapping a different camera doesn't wait on motionEye, the card prepares 
 - **Always fresh:** strips refresh about every two minutes, and about 20 seconds after a camera detects motion. A refresh never blanks the strip. You keep seeing the current clips, and the strip only redraws if something has changed
 - **Data saving:** when the quality is SD (or Auto has chosen SD), thumbnails are not preloaded, only the ones you scroll to. The lists are still prefetched, as they're tiny
 - **Opting out:** set `strip_prefetch: false` if you'd rather the card only ever loads the camera on screen
+
+### 24-hour timeline bar
+
+A slim bar above the recordings strip shows the last 24 hours of recordings for the selected camera, with **now at the far left** and time running back to the right:
+
+- **Light green blocks** are periods with recordings, **indigo ticks** are videos and **dark navy ticks** are snapshots
+- The **pink cursor** marks the recording you last opened, and an **outlined box** shows which part of the 24 hours the clips currently visible in the strip cover; it moves as you scroll the strip
+- **Tap the bar** to open the nearest recording in the viewer (use its arrows to step through). Tapping empty space just shows that time; on a mouse, hovering shows it too
+- It follows `strip_content`, reads at most `timeline_limit` items per kind per day, slides along with the clock every minute, and shows times as motionEye saved them
+
+Set `timeline_bar: false` to hide it. The colours can be changed with the CSS variables (for example via card-mod) `--me-bar-bg`, `--me-bar-activity`, `--me-bar-video`, `--me-bar-image`, `--me-bar-cursor` and `--me-bar-window`. For browsing older days, use the Timeline tab.
 
 ### Timeline tab
 

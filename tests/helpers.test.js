@@ -181,3 +181,58 @@ test("fitMode fills the tile when the thumbnail is close to its shape, otherwise
   assert.strictEqual(fitMode(NaN, 1.7), "contain");
   assert.strictEqual(fitMode(1.7, 0), "contain");
 });
+
+// ---- day timeline bar helpers ----
+const bar = require("../motioneye-camera-card.js");
+
+test("dayBounds spans a local calendar day and hourMarks sit within it", () => {
+  const b = bar.dayBounds("2026-11-24");
+  assert.equal(b.length, 24 * 3600 * 1000);
+  const marks = bar.hourMarks("2026-11-24", 180);
+  assert.equal(marks.length, 8);
+  assert.equal(marks[0].label, "00:00");
+  assert.equal(marks[1].label, "03:00");
+  assert.ok(Math.abs(marks[4].frac - 0.5) < 1e-9);
+});
+
+test("dayFraction clamps to the day", () => {
+  const b = bar.dayBounds("2026-11-24");
+  assert.equal(bar.dayFraction(b.start - 1000, "2026-11-24"), 0);
+  assert.equal(bar.dayFraction(b.end + 1000, "2026-11-24"), 1);
+  assert.ok(Math.abs(bar.dayFraction(b.start + b.length / 2, "2026-11-24") - 0.5) < 1e-9);
+});
+
+test("mergeSpans joins nearby recordings and pads them", () => {
+  const m = 60000;
+  const spans = bar.mergeSpans([0, 2 * m, 3 * m, 30 * m], 5 * m, m);
+  assert.equal(spans.length, 2);
+  assert.deepEqual(spans[0], { start: -m, end: 4 * m });
+  assert.deepEqual(spans[1], { start: 29 * m, end: 31 * m });
+});
+
+test("nearestIndex respects tolerance and ignores undated items", () => {
+  const items = [{ ts: 1000 }, { ts: null }, { ts: 5000 }];
+  assert.equal(bar.nearestIndex(items, 4800, 500), 2);
+  assert.equal(bar.nearestIndex(items, 3000, 500), -1);
+  assert.equal(bar.nearestIndex([], 0, 10), -1);
+});
+
+test("fmtClock pads HH:MM:SS", () => {
+  assert.equal(bar.fmtClock(new Date(2026, 10, 24, 7, 5, 9).getTime()), "07:05:09");
+});
+
+test("rollFrac puts now at 0 and 24 hours ago at 1", () => {
+  const now = Date.now();
+  assert.equal(bar.rollFrac(now, now), 0);
+  assert.equal(bar.rollFrac(now - 864e5, now), 1);
+  assert.ok(Math.abs(bar.rollFrac(now - 432e5, now) - 0.5) < 1e-9);
+});
+
+test("rollingMarks starts at Now and labels whole hours going back", () => {
+  const now = new Date(2026, 10, 25, 11, 48).getTime();
+  const m = bar.rollingMarks(now, 3);
+  assert.equal(m[0].label, "Now");
+  assert.equal(m[1].label, "09:00");
+  assert.ok(m.every((x) => x.frac >= 0 && x.frac < 1));
+  assert.equal(m.length, 8);
+});

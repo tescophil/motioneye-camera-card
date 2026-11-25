@@ -5,13 +5,14 @@
  * No build step, no dependencies.  MIT licence.
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 const CARD_TAG = "motioneye-camera-card";
 const QUALITY_KEY = "motioneye-camera-card:quality";
 const STRIP_TTL = 120000; // ms before a camera's recordings strip is refreshed in the background
 const STRIP_ERROR_TTL = 30000; // ms before a failed strip load is retried
 const PRELOAD_PER_CAMERA = 8; // thumbnails fetched ahead of time per camera
 const MAX_BLOBS = 300; // cap on preloaded thumbnails kept in memory
+const BAR_TTL = 120000; // ms before the day timeline bar is refreshed in the background
 
 const DEFAULT_CONFIG = {
   layout: "grid", // grid | single
@@ -29,6 +30,7 @@ const DEFAULT_CONFIG = {
   strip_content: "both", // both | videos | snapshots
   strip_limit: 30, // max items in the strip
   strip_prefetch: true, // load every camera's strip (and its first thumbnails) in the background
+  timeline_bar: true, // 24-hour activity bar under the recordings strip
   timeline_days: 7, // how many of the newest days to load (0 = all available days)
   timeline_limit: 500, // safety cap on items per kind (videos / images) per camera
 };
@@ -74,6 +76,7 @@ function normalizeConfig(config) {
   }
   cfg.strip = cfg.strip !== false;
   cfg.strip_prefetch = cfg.strip_prefetch !== false;
+  cfg.timeline_bar = cfg.timeline_bar !== false;
   cfg.strip_limit = Math.min(100, Math.max(1, Math.floor(Number(cfg.strip_limit)) || 30));
   return cfg;
 }
@@ -103,6 +106,94 @@ function fingerprint(items) {
 function fitMode(imgRatio, boxRatio) {
   if (!(imgRatio > 0) || !(boxRatio > 0)) return "contain";
   return Math.abs(imgRatio / boxRatio - 1) <= 0.15 ? "cover" : "contain";
+}
+
+// ---- day timeline bar helpers ----
+
+// Start, end and length (ms) of a local calendar day, e.g. "2026-11-24". Length is 23/25 h on DST days.
+function dayBounds(dateKey) {
+  const [Y, M, D] = dateKey.split("-").map(Number);
+  const start = new Date(Y, M - 1, D).getTime();
+  const end = new Date(Y, M - 1, D + 1).getTime();
+  return { start, end, length: end - start };
+}
+
+// Where in the day (0 to 1) a timestamp falls.
+function dayFraction(ts, dateKey) {
+  const { start, length } = dayBounds(dateKey);
+  return Math.min(1, Math.max(0, (ts - start) / length));
+}
+
+// Axis labels for a day: one every `stepMin` minutes, with their position (0 to 1).
+function hourMarks(dateKey, stepMin) {
+  const [Y, M, D] = dateKey.split("-").map(Number);
+  const { start, length } = dayBounds(dateKey);
+  const out = [];
+  for (let m = 0; m < 1440; m += stepMin) {
+    const t = new Date(Y, M - 1, D, 0, m).getTime();
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    out.push({ label: `${hh}:${mm}`, frac: (t - start) / length });
+  }
+  return out;
+}
+
+// Merge recording times that are close together into spans, like the green "coverage" on a CCTV timeline.
+function mergeSpans(times, gapMs, padMs) {
+  const sorted = times.filter(Number.isFinite).sort((a, b) => a - b);
+  const spans = [];
+  for (const t of sorted) {
+    const last = spans[spans.length - 1];
+    if (last && t - last.end <= gapMs) last.end = t;
+    else spans.push({ start: t, end: t });
+  }
+  return spans.map((s) => ({ start: s.start - padMs, end: s.end + padMs }));
+}
+
+// Index of the recording nearest to time t, if it is within tolMs; otherwise -1.
+function nearestIndex(items, t, tolMs) {
+  let best = -1;
+  let bestD = Infinity;
+  items.forEach((it, i) => {
+    if (it.ts == null) return;
+    const d = Math.abs(it.ts - t);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return best >= 0 && bestD <= tolMs ? best : -1;
+}
+
+// Where a time falls in the rolling 24 h window that ends at `now`: 0 = now, 1 = 24 hours ago.
+function rollFrac(ts, now) {
+  return (now - ts) / 864e5;
+}
+
+// Axis labels for the rolling window: "Now", then each whole `stepH` hours back (clock times).
+function rollingMarks(now, stepH) {
+  const out = [{ label: "Now", frac: 0 }];
+  const top = new Date(now);
+  top.setMinutes(0, 0, 0);
+  let t = top.getTime();
+  const seen = [];
+  for (let k = 0; k <= 24; k++, t -= 36e5) {
+    const f = rollFrac(t, now);
+    if (f > 1) break;
+    const h = new Date(t).getHours();
+    if (h % stepH === 0 && f > 0.03 && f < 0.97) seen.push({ label: `${String(h).padStart(2, "0")}:00`, frac: f });
+  }
+  return out.concat(seen);
+}
+
+function fmtClock(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function pct(f) {
+  return `${(Math.min(1, Math.max(0, f)) * 100).toFixed(3)}%`;
 }
 
 // Index of the first camera whose motion flag just turned on, or -1.
@@ -228,6 +319,21 @@ button{font:inherit;color:inherit;cursor:pointer}
 .item.skel .ph{color:#3a3a3a}
 @keyframes shimmer{from{background-position:100% 50%}to{background-position:0 50%}}
 @media(prefers-reduced-motion:reduce){.item.skel{animation:none}}
+.tbar{margin:8px 2px 6px}
+.tb-bar .win{top:0;bottom:0;min-width:6px;box-sizing:border-box;border:2px solid var(--me-bar-window,var(--primary-text-color,#888));border-radius:4px;background:rgba(128,128,128,.25);z-index:1}
+.tb-wrap{position:relative}
+.tb-axis{position:relative;height:14px;font-size:.68rem;color:var(--secondary-text-color)}
+.tb-axis span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.tb-axis span.first{transform:none}
+.tb-bar{position:relative;height:24px;border-radius:6px;background:var(--me-bar-bg,#6a994e);overflow:hidden;cursor:pointer}
+.tb-bar i{position:absolute;pointer-events:none}
+.tb-bar .sp{top:0;bottom:0;min-width:3px;background:var(--me-bar-activity,#d4f5b8);opacity:.7;border-radius:2px}
+.tb-bar .tk{top:0;bottom:0;width:2px;margin-left:-1px;background:var(--me-bar-video,#4f46e5)}
+.tb-bar .tk.image{top:auto;height:12px;width:2px;margin-left:-1px;background:var(--me-bar-image,#0a2540)}
+.tb-bar .cur{top:0;bottom:0;width:2px;margin-left:-1px;background:var(--me-bar-cursor,#ff4081)}
+.tb-bar.skel{background:linear-gradient(90deg,#1b1b1b 25%,#2a2a2a 40%,#1b1b1b 60%);background-size:300% 100%;animation:shimmer 1.4s ease-in-out infinite;cursor:default}
+@media(prefers-reduced-motion:reduce){.tb-bar.skel{animation:none}}
+.tb-tip{position:absolute;top:-2px;transform:translateX(-50%);background:rgba(0,0,0,.85);color:#fff;padding:2px 8px;border-radius:6px;font-size:.75rem;pointer-events:none;white-space:nowrap;z-index:2}
 .modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.92);display:flex;flex-direction:column}
 .mbar{display:flex;align-items:center;gap:8px;padding:10px 12px;color:#fff}
 .mbar .sp{flex:1;font-size:.95rem}
@@ -272,6 +378,14 @@ class MotionEyeCameraCard extends HTMLElement {
     this._blobPending = new Map();
     this._preQueue = [];
     this._preActive = 0;
+    this._bar = {}; // camera entity -> { at, items, fp, capped } for the last 24 hours
+    this._barErr = {};
+    this._barFail = {};
+    this._barBusy = new Set();
+    this._barCursor = null;
+    this._barSig = null;
+    this._barItems = [];
+    this._barNow = 0;
   }
 
   /* ---------- Lovelace API ---------- */
@@ -291,6 +405,10 @@ class MotionEyeCameraCard extends HTMLElement {
     if (this._sel >= this._config.cameras.length) this._sel = 0;
     this._tl = {};
     this._strip = {};
+    this._bar = {};
+    this._barErr = {};
+    this._barFail = {};
+    this._barCursor = null;
     this._clearBackground();
     this._build();
     if (this._hass) this._afterHass();
@@ -315,7 +433,7 @@ class MotionEyeCameraCard extends HTMLElement {
   connectedCallback() {
     this._io = new IntersectionObserver((entries) => {
       this._visible = entries.some((e) => e.isIntersecting);
-      this._updateActive();
+      if (this._config) this._updateActive();
     });
     this._io.observe(this);
     this._onVis = () => this._updateActive();
@@ -333,9 +451,13 @@ class MotionEyeCameraCard extends HTMLElement {
       if (this._modalOpen && e.key === "Escape") this._closeModal();
     };
     window.addEventListener("keydown", this._onKey);
-    this._ticker = setInterval(() => this._updateMotion(), 1000);
+    let ticks = 0;
+    this._ticker = setInterval(() => {
+      this._updateMotion();
+      if (++ticks % 60 === 0) this._updateBarNow(); // slide the 24-hour window along with the clock
+    }, 1000);
     if (this._config && this._hass) this._afterHass();
-    this._updateActive(true);
+    if (this._config) this._updateActive(true);
   }
 
   disconnectedCallback() {
@@ -439,6 +561,7 @@ class MotionEyeCameraCard extends HTMLElement {
             <div class="msg" id="msg"></div>
           </div>
           <div class="note" id="note" hidden></div>
+          <div class="tbar" id="tbar" hidden></div>
           <div class="strip" id="strip" hidden></div>
           <div id="picker"></div>
         </div>
@@ -512,13 +635,37 @@ class MotionEyeCameraCard extends HTMLElement {
       const el = e.target.closest("[data-idx]");
       if (el) this._openModal(Number(el.dataset.idx));
     };
+    this._q("#strip").addEventListener(
+      "scroll",
+      () => {
+        if (this._winRaf) return;
+        this._winRaf = requestAnimationFrame(() => {
+          this._winRaf = 0;
+          this._updateStripWindow();
+        });
+      },
+      { passive: true }
+    );
+    if (typeof ResizeObserver !== "undefined") {
+      this._tbRO?.disconnect();
+      this._tbRO = new ResizeObserver(() => this._snapBar());
+      this._tbRO.observe(this._q("#tbar"));
+    }
+    this._q("#tbar").onclick = (e) => this._onBarClick(e);
+    this._q("#tbar").onpointermove = (e) => this._onBarMove(e);
+    this._q("#tbar").onpointerleave = () => {
+      const tip = this._q(".tb-tip");
+      if (tip) tip.hidden = true;
+    };
     this._q("#mClose").onclick = () => this._closeModal();
     this._q("#mPrev").onclick = () => this._openModal(this._modalIdx - 1);
     this._q("#mNext").onclick = () => this._openModal(this._modalIdx + 1);
 
     this._stripSig = null;
+    this._barSig = null;
     this._renderPicker();
     this._renderStrip(); // placeholders straight away, so the layout never jumps
+    this._renderBar();
     this._updateQualityUi();
     this._mainKey = null;
     this._thumbKeys = [];
@@ -558,6 +705,7 @@ class MotionEyeCameraCard extends HTMLElement {
     if (this._active) this._connectMain(false);
     if (this._active && this._view === "live") {
       this._loadStrip();
+      this._loadBar();
       this._prefetchStrips();
     }
   }
@@ -602,7 +750,10 @@ class MotionEyeCameraCard extends HTMLElement {
     this._updateStatus();
     this._connectMain(true);
     if (this._view === "timeline") this._loadTimeline();
-    else this._loadStrip();
+    else {
+      this._loadStrip();
+      this._loadBar();
+    }
   }
 
   _setView(v) {
@@ -645,6 +796,7 @@ class MotionEyeCameraCard extends HTMLElement {
       this._connectMain(true);
       this._startThumbs();
       this._loadStrip();
+      this._loadBar();
     } else {
       this._detachMain();
       this._stopThumbs();
@@ -1193,15 +1345,22 @@ class MotionEyeCameraCard extends HTMLElement {
     if (gen === this._gen && this._cam().entity === key) this._renderStrip();
   }
 
-  // Load the other cameras' strips one at a time, so switching camera is instant.
+  // Load the other cameras' strips (and day bars) one at a time, so switching camera is instant.
   async _prefetchStrips() {
     const c = this._config;
-    if (!c.strip || !c.strip_prefetch || this._prefetching || c.cameras.length < 2) return;
+    if ((!c.strip && !c.timeline_bar) || !c.strip_prefetch || this._prefetching || c.cameras.length < 2) return;
     const selected = this._cam().entity;
-    if (!this._strip[selected]) return; // the camera on screen always goes first
+    // the camera on screen always goes first
+    if (c.strip && !this._strip[selected]) return;
+    if (c.timeline_bar && !this._bar[selected] && !this._barErr[selected]) return;
     const now = Date.now();
+    // the bar's lists are bigger than the strip's, so skip them on a slow / data-saving connection
+    const barToo = c.timeline_bar && this._effectiveQuality() !== "low";
     const todo = c.cameras.filter((cam) => {
-      if (cam.entity === selected || this._stripFresh(this._strip[cam.entity])) return false;
+      if (cam.entity === selected) return false;
+      const stale =
+        (c.strip && !this._stripFresh(this._strip[cam.entity])) || (barToo && !this._barFresh(cam.entity));
+      if (!stale) return false;
       const failed = this._prefetchFail[cam.entity];
       return !(failed && now - failed < 300000); // don't hammer a camera that keeps failing
     });
@@ -1211,8 +1370,9 @@ class MotionEyeCameraCard extends HTMLElement {
     try {
       for (const cam of todo) {
         if (gen !== this._gen || !this._active || this._view !== "live") break;
-        await this._refreshStrip(cam);
-        if (this._strip[cam.entity]?.error) this._prefetchFail[cam.entity] = Date.now();
+        if (c.strip && !this._stripFresh(this._strip[cam.entity])) await this._refreshStrip(cam);
+        if (barToo && !this._barFresh(cam.entity)) await this._refreshBar(cam);
+        if (this._strip[cam.entity]?.error || this._barErr[cam.entity]) this._prefetchFail[cam.entity] = Date.now();
         await new Promise((r) => setTimeout(r, 400)); // be gentle with Home Assistant and motionEye
       }
     } finally {
@@ -1226,10 +1386,14 @@ class MotionEyeCameraCard extends HTMLElement {
       delete this._tl[cam.entity];
       const selected = this._cam().entity === cam.entity;
       if (selected && this._view === "timeline") this._loadTimeline(true);
-      else if (selected) this._loadStrip(true);
+      else if (selected) {
+        this._loadStrip(true);
+        this._loadBar(true);
+      }
       if (!selected || this._view === "timeline") {
         // mark stale: refreshed in the background (or when this camera is next selected)
         if (this._strip[cam.entity]) this._strip[cam.entity].at = 0;
+        if (this._bar[cam.entity]) this._bar[cam.entity].at = 0;
       }
     }, 20000);
   }
@@ -1351,6 +1515,7 @@ class MotionEyeCameraCard extends HTMLElement {
     if (!d) {
       el.innerHTML = this._stripPlaceholders();
       el.scrollLeft = 0;
+      this._updateStripWindow();
       return;
     }
     if (d.error) {
@@ -1372,6 +1537,274 @@ class MotionEyeCameraCard extends HTMLElement {
       .join("");
     el.scrollLeft = keepScroll;
     this._lazyThumbs(el, "_stripIO", el, "0px 200px");
+    this._updateStripWindow();
+  }
+
+  /* ---------- 24-hour timeline bar (under the recordings strip) ---------- */
+  // A rolling window: "now" is at the far left and time runs back to 24 hours ago on the right.
+
+  _barFresh(key) {
+    const failed = this._barFail[key];
+    if (failed && Date.now() - failed < 30000) return true; // recently failed: don't retry on every update
+    const d = this._bar[key];
+    return !!d && Date.now() - d.at < BAR_TTL;
+  }
+
+  async _loadBar(force = false) {
+    if (!this._config.timeline_bar || !this._hass) return;
+    const cam = this._cam();
+    this._renderBar(); // cached data (even if stale) or a placeholder, straight away
+    if (!force && this._barFresh(cam.entity)) return;
+    await this._refreshBar(cam);
+  }
+
+  // Which days have recordings, and where each day's folder is (two small requests).
+  async _barListDays(cam) {
+    const src = await this._findKinds(cam);
+    const list = async (rootId, kind) => {
+      const out = { dirs: {}, loose: [] };
+      if (!rootId) return out;
+      const node = await this._browse(rootId);
+      for (const k of node.children || []) {
+        if (k.can_expand) {
+          const dk = parseTimestamp(k.title, [], "").dateKey;
+          if (dk) out.dirs[dk] = k.media_content_id;
+        } else {
+          out.loose.push({
+            title: k.title,
+            id: k.media_content_id,
+            thumb: k.thumbnail,
+            kind,
+            ...parseTimestamp(k.title, [], k.media_content_id),
+          });
+        }
+      }
+      return out;
+    };
+    const [m, i] = await Promise.all([list(src.movies, "video"), list(src.images, "image")]);
+    const days = new Set([...Object.keys(m.dirs), ...Object.keys(i.dirs)]);
+    for (const x of [...m.loose, ...i.loose]) if (x.dateKey) days.add(x.dateKey);
+    return {
+      at: Date.now(),
+      days: [...days].sort().reverse(),
+      dirs: { video: m.dirs, image: i.dirs },
+      loose: { video: m.loose, image: i.loose },
+    };
+  }
+
+  async _barLoadDay(cam, day, idx) {
+    const c = this._config;
+    const perDay = c.timeline_limit;
+    const want = (kind) => c.strip_content === "both" || (c.strip_content === "videos" ? kind === "video" : kind === "image");
+    const one = async (kind) => {
+      if (!want(kind)) return [];
+      const dirId = idx.dirs[kind][day];
+      const fromDir = dirId ? await this._collect(dirId, perDay, [day], kind, 1) : [];
+      return fromDir.concat(idx.loose[kind].filter((x) => x.dateKey === day));
+    };
+    const [v, im] = await Promise.all([one("video"), one("image")]);
+    const items = [...v, ...im].filter((x) => x.ts != null).sort(byTsDesc);
+    return {
+      at: Date.now(),
+      items,
+      fp: fingerprint(items),
+      capped: { video: v.length >= perDay, image: im.length >= perDay },
+    };
+  }
+
+  async _refreshBar(cam) {
+    const key = cam.entity;
+    if (this._barBusy.has(key)) return;
+    this._barBusy.add(key);
+    const gen = this._gen;
+    try {
+      const idx = await this._barListDays(cam);
+      if (gen !== this._gen) return;
+      const now = Date.now();
+      const since = now - 864e5;
+      // the 24 hours reach back into yesterday (or earlier, if the clock moved)
+      const wanted = [...new Set([localDateKey(new Date(now)), localDateKey(new Date(since))])].filter((d) => idx.days.includes(d));
+      const parts = [];
+      for (const day of wanted) parts.push(await this._barLoadDay(cam, day, idx));
+      if (gen !== this._gen) return;
+      const items = parts.flatMap((x) => x.items).filter((x) => x.ts >= since - 6e4).sort(byTsDesc);
+      this._bar[key] = {
+        at: Date.now(),
+        items,
+        fp: fingerprint(items),
+        capped: { video: parts.some((x) => x.capped.video), image: parts.some((x) => x.capped.image) },
+      };
+      this._barErr[key] = null;
+      delete this._barFail[key];
+    } catch (e) {
+      if (gen !== this._gen) return;
+      this._barFail[key] = Date.now();
+      if (!this._bar[key]) this._barErr[key] = e?.message || String(e); // otherwise keep what we have
+    } finally {
+      this._barBusy.delete(key);
+    }
+    if (gen === this._gen && this._cam().entity === key) this._renderBar();
+  }
+
+  // force = true redraws even if the recordings are unchanged (the window has moved on)
+  _renderBar(force = false) {
+    const el = this._q("#tbar");
+    if (!el) return;
+    const c = this._config;
+    el.hidden = !c.timeline_bar;
+    if (!c.timeline_bar) return;
+    const key = this._cam().entity;
+    const d = this._bar[key];
+    const err = this._barErr[key];
+    const sig = [key, d ? d.fp : "none", err || ""].join("|");
+    if (sig === this._barSig && !force) return;
+    this._barSig = sig;
+    const now = Date.now();
+    const items = d ? d.items.filter((i) => rollFrac(i.ts, now) <= 1) : [];
+    this._barItems = items;
+    this._barNow = now;
+    let inner = "";
+    if (d) {
+      const spans = mergeSpans(items.map((i) => i.ts), 5 * 60000, 60000);
+      inner += spans
+        .map((sp) => {
+          const f1 = rollFrac(sp.end, now);
+          const f2 = Math.min(1, rollFrac(sp.start, now));
+          return `<i class="sp" style="left:${pct(f1)};width:${pct(f2 - f1)}"></i>`;
+        })
+        .join("");
+      inner += items.map((i) => `<i class="tk ${i.kind}" data-f="${rollFrac(i.ts, now).toFixed(6)}" style="left:${pct(rollFrac(i.ts, now))}"></i>`).join("");
+      inner += `<i class="cur" hidden></i>`;
+    }
+    inner += `<i class="win" hidden></i>`;
+    const axis = rollingMarks(now, 3)
+      .map((m, n) => `<span${n === 0 ? ' class="first"' : ""} style="left:${pct(m.frac)}">${m.label}</span>`)
+      .join("");
+    el.innerHTML = `
+      <div class="tb-wrap">
+        <div class="tb-axis">${axis}</div>
+        <div class="tb-bar${d || err ? "" : " skel"}" ${err ? `title="${esc(err)}"` : ""}>${inner}</div>
+        <div class="tb-tip" hidden></div>
+      </div>`;
+    this._placeBarCursor();
+    this._snapBar();
+    this._updateStripWindow();
+  }
+
+  // Put the markers on whole device pixels so their edges stay sharp instead of being smeared across two.
+  _snapBar() {
+    const bar = this._q(".tb-bar");
+    if (!bar || !bar.clientWidth) return;
+    const w = bar.clientWidth;
+    const dpr = window.devicePixelRatio || 1;
+    const snap = (f) => `${Math.round(f * w * dpr) / dpr}px`;
+    bar.querySelectorAll(".tk[data-f]").forEach((n) => {
+      n.style.left = snap(+n.dataset.f);
+    });
+    const cur = bar.querySelector(".cur:not([hidden])");
+    if (cur && cur.dataset.f) cur.style.left = snap(+cur.dataset.f);
+  }
+
+  // Highlight, on the bar, the span of time covered by the clips currently visible in the strip.
+  _updateStripWindow() {
+    const win = this._q(".tb-bar .win");
+    const strip = this._q("#strip");
+    if (!win) return;
+    const items = this._stripItems || [];
+    let first = Infinity;
+    let last = -Infinity;
+    if (strip && !strip.hidden && this._barNow && items.length) {
+      const view = strip.getBoundingClientRect();
+      strip.querySelectorAll(".item[data-idx]").forEach((n) => {
+        const r = n.getBoundingClientRect();
+        const mid = (r.left + r.right) / 2;
+        const ts = items[+n.dataset.idx]?.ts;
+        if (ts == null || mid < view.left || mid > view.right) return;
+        first = Math.min(first, rollFrac(ts, this._barNow)); // newest = nearest the left
+        last = Math.max(last, rollFrac(ts, this._barNow));
+      });
+    }
+    if (first === Infinity || first > 1) {
+      win.hidden = true;
+      return;
+    }
+    const pad = 0.004;
+    const f1 = Math.max(0, first - pad);
+    const f2 = Math.min(1, last + pad);
+    win.style.left = pct(f1);
+    win.style.width = pct(Math.max(0, f2 - f1));
+    win.hidden = false;
+  }
+
+  // the window moves with the clock, so redraw it every so often
+  _updateBarNow() {
+    if (this._config?.timeline_bar && this._active !== false) this._renderBar(true);
+  }
+
+  _setBarCursor(ts) {
+    this._barCursor = { key: this._cam().entity, ts };
+    this._placeBarCursor();
+  }
+
+  _placeBarCursor() {
+    const cur = this._q(".tb-bar .cur");
+    if (!cur || !this._barCursor || this._barCursor.key !== this._cam().entity) return;
+    const f = rollFrac(this._barCursor.ts, this._barNow || Date.now());
+    cur.hidden = f < 0 || f > 1;
+    if (!cur.hidden) {
+      cur.dataset.f = f.toFixed(6);
+      cur.style.left = pct(f);
+      this._snapBar();
+    }
+  }
+
+  // Time under a pointer, and the recording nearest to it (within about a fingertip).
+  _barHit(clientX) {
+    const bar = this._q(".tb-bar");
+    const r = bar.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - r.left) / (r.width || 1)));
+    const t = this._barNow - frac * 864e5;
+    return { t, i: nearestIndex(this._barItems, t, (14 / (r.width || 1)) * 864e5) };
+  }
+
+  _showBarTip(text, clientX) {
+    const tip = this._q(".tb-tip");
+    const wrap = this._q(".tb-wrap");
+    if (!tip || !wrap) return;
+    const r = wrap.getBoundingClientRect();
+    tip.textContent = text;
+    tip.style.left = `${Math.min(r.width - 30, Math.max(30, clientX - r.left))}px`;
+    tip.hidden = false;
+  }
+
+  _onBarMove(e) {
+    const tip = this._q(".tb-tip");
+    if (!tip) return;
+    if (e.pointerType !== "mouse" || !this._barNow || !e.target.closest(".tb-bar")) {
+      tip.hidden = true;
+      return;
+    }
+    const { t, i } = this._barHit(e.clientX);
+    const kind = i >= 0 ? (this._barItems[i].kind === "video" ? " · video" : " · snapshot") : "";
+    this._showBarTip(fmtClock(i >= 0 ? this._barItems[i].ts : t) + kind, e.clientX);
+  }
+
+  _onBarClick(e) {
+    if (!e.target.closest(".tb-bar") || !this._barNow) return;
+    const { t, i } = this._barHit(e.clientX);
+    if (i >= 0) {
+      this._setBarCursor(this._barItems[i].ts);
+      this._tlVisible = this._barItems;
+      this._openModal(i);
+    } else {
+      this._setBarCursor(t);
+      this._showBarTip(`${fmtClock(t)} · no recording`, e.clientX);
+      clearTimeout(this._barTipTimer);
+      this._barTipTimer = setTimeout(() => {
+        const tip = this._q(".tb-tip");
+        if (tip) tip.hidden = true;
+      }, 1500);
+    }
   }
 
   /* ---------- media modal ---------- */
@@ -1381,6 +1814,7 @@ class MotionEyeCameraCard extends HTMLElement {
     if (!item) return;
     this._modalIdx = idx;
     this._modalOpen = true;
+    if (this._tlVisible === this._barItems && item.ts != null) this._setBarCursor(item.ts);
     this._connectMain(); // pause the live stream while a recording is open
     this._q("#modal").hidden = false;
     this._q("#mPrev").disabled = idx <= 0;
@@ -1483,6 +1917,7 @@ class MotionEyeCameraCardEditor extends HTMLElement {
       { name: "select_on_motion_lock", selector: { number: { min: 0, max: 3600, unit_of_measurement: "s", mode: "box" } } },
       { name: "strip", selector: { boolean: {} } },
       { name: "strip_prefetch", selector: { boolean: {} } },
+      { name: "timeline_bar", selector: { boolean: {} } },
       { name: "timeline", selector: { boolean: {} } },
     ];
   }
@@ -1504,6 +1939,7 @@ class MotionEyeCameraCardEditor extends HTMLElement {
           timeline_days: "Timeline days (0 = all)",
           strip: "Show recordings strip under the main image",
           strip_prefetch: "Load other cameras' recordings in the background",
+          timeline_bar: "Show the 24-hour timeline bar under the strip",
           strip_content: "Strip content",
           strip_limit: "Strip items",
           thumb_quality: "Grid tile quality",
@@ -1588,6 +2024,14 @@ if (typeof module !== "undefined" && module.exports) {
     firstRisingEdge,
     fingerprint,
     fitMode,
+    dayBounds,
+    dayFraction,
+    rollFrac,
+    rollingMarks,
+    hourMarks,
+    mergeSpans,
+    nearestIndex,
+    fmtClock,
     MotionEyeCameraCard,
     DEFAULT_CONFIG,
   };

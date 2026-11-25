@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- **New:** a compact 24-hour timeline bar above the recordings strip, in the style of a CCTV player. It always shows the last 24 hours with the current time at the far left. Light green blocks show when recordings exist, indigo ticks are videos, dark navy ticks are snapshots, and a pink cursor marks the recording you last opened
+- An outlined box on the bar shows which clips are visible in the strip below and moves as the strip is scrolled
+- Tap the bar to open the nearest recording; hovering with a mouse shows the time
+- Green (`#6a994e`) background with no border and sharp, pixel-aligned markers. All colours can be overridden with `--me-bar-*` CSS variables
+- Follows `strip_content`, loads quietly in the background for every camera (skipped on SD) and slides along with the clock. Turn it off with `timeline_bar: false`
+- **Fixed:** the card no longer throws if the browser attaches it before its configuration arrives
+
 ## 1.1.0
 
 - **New:** `select_on_motion` makes a camera the main camera when it starts detecting motion, with `select_on_motion_lock` to leave your own choice alone for a while

@@ -18,7 +18,7 @@ function makeCard(extra = {}) {
   const card = new MotionEyeCameraCard();
   const strip = { innerHTML: "", hidden: true, scrollLeft: 0, querySelectorAll: () => [] };
   card._q = (sel) => (sel === "#strip" ? strip : null);
-  card._config = normalizeConfig({ cameras: ["camera.a", "camera.b", "camera.c"], ...extra });
+  card._config = normalizeConfig({ cameras: ["camera.a", "camera.b", "camera.c"], timeline_bar: false, ...extra });
   card._hass = { states: {}, locale: { language: "en" } };
   card._active = true;
   card._view = "live";

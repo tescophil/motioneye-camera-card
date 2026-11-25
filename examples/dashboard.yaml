@@ -17,6 +17,7 @@ strip: true
 strip_content: both           # both | videos | snapshots
 strip_limit: 30
 strip_prefetch: true          # load other cameras' recordings in the background
+timeline_bar: true            # 24-hour bar under the strip
 timeline: true
 timeline_days: 7              # 0 = all available days
 timeline_limit: 500           # per day, per type
