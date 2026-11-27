@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Docs:** the README now installs the card from the Home Assistant Marketplace, with an **Open in your Home Assistant** button, and no longer describes the HACS custom-repository steps
+
 ## 1.2.1
 
 - **New:** per-camera options can now be set in the visual editor. A **Camera options** section has a collapsible panel for each camera with its display name, low-res camera and motion sensor (`name`, `low_entity`, `motion_entity`), so these no longer need YAML. Blank fields use the defaults

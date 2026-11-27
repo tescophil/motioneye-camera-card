@@ -1,6 +1,5 @@
 # MotionEye Camera Card
 
-[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A Lovelace card for Home Assistant that turns your [motionEye](https://github.com/motioneye-project/motioneye) cameras into a mobile-friendly camera wall.
@@ -33,12 +32,15 @@ The **Live** view (left) shows the selected camera with its latest recordings in
 
 ## Installation
 
-### HACS (custom repository)
+### From the Marketplace
 
-1. In HACS, open the three-dot menu and choose **Custom repositories**
-2. Add `https://github.com/tescophil/motioneye-camera-card` with category **Dashboard** (called *Lovelace* in older HACS versions)
-3. Find **MotionEye Camera Card** in HACS and install it
-4. Reload your browser. HACS adds the dashboard resource for you
+[![Open your Home Assistant instance and show the MotionEye Camera Card in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=tescophil&repository=motioneye-camera-card&category=plugin)
+
+Click the button above to open the card in your Home Assistant, or install it by hand:
+
+1. In Home Assistant, open the **Marketplace** and search for **MotionEye Camera Card**
+2. Select it and click **Install**
+3. Reload your browser. The dashboard resource is added for you
 
 ### Manual
 
@@ -217,10 +219,6 @@ Dates and times are read from motionEye's default `YYYY-MM-DD` folders with `HH-
 - Reading the entity registry, used to match cameras to motionEye devices, is admin-only. Non-admin users fall back to matching by camera name
 - Full-screen uses the browser's fullscreen mode where available, and falls back to filling the window on iOS
 - The card has been built against Home Assistant's documented APIs and the motionEye integration's media source. If something doesn't match your setup, please open an issue with the card's error text
-
-## Publishing to the HACS default list
-
-The repository already includes `hacs.json` and a validation workflow. To be listed in HACS without adding a custom repository, it needs to be public, have a description and topics, have at least one GitHub release, pass the HACS validation action, and be submitted as a pull request to [hacs/default](https://github.com/hacs/default).
 
 ## Development
 

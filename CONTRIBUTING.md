@@ -30,4 +30,4 @@ Please include your Home Assistant version, your browser or app, your card YAML 
 
 ## Releases
 
-Tag a version (for example `v1.0.1`). The release workflow creates a GitHub release and attaches `motioneye-camera-card.js`, which is what HACS installs.
+Tag a version (for example `v1.0.1`). The release workflow creates a GitHub release and attaches `motioneye-camera-card.js`, which is what the Marketplace installs.
